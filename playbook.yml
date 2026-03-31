@@ -1,0 +1,179 @@
+---
+- name: Deploy EMOM Media Server
+  hosts: all
+  become: yes
+  vars:
+    media_root: /media/emom_2tb
+    repo_path: /opt/emom/mediaserver
+    repo_url: "https://github.com/your-org/mediaserver.git"  # Update with actual repo URL
+    media_hostname: "media.example.com"  # Update with actual hostname
+    service_user: www-data
+    service_group: www-data
+
+  tasks:
+    # Step 1: Install runtime dependencies
+    - name: Update apt cache
+      apt:
+        update_cache: true
+        cache_valid_time: 3600
+
+    - name: Install runtime dependencies
+      ansible.builtin.package:
+        name:
+          - python3
+          - python3-pip
+          - inotify-tools
+          - nginx
+          - git
+        state: present
+
+    # Step 2: Create deployment directories
+    - name: Ensure /opt/emom directory exists
+      ansible.builtin.file:
+        path: /opt/emom
+        state: directory
+        mode: '0755'
+
+    - name: Clone mediaserver repository
+      ansible.builtin.git:
+        repo: "{{ repo_url }}"
+        dest: "{{ repo_path }}"
+        version: main
+      register: git_clone
+
+    # Step 3: Ensure media root and subdirectories exist
+    - name: Ensure media root directory exists
+      ansible.builtin.file:
+        path: "{{ media_root }}"
+        state: directory
+        mode: '0755'
+        owner: "{{ service_user }}"
+        group: "{{ service_group }}"
+
+    - name: Ensure gallery subdirectory exists
+      ansible.builtin.file:
+        path: "{{ media_root }}/gallery"
+        state: directory
+        mode: '0755'
+        owner: "{{ service_user }}"
+        group: "{{ service_group }}"
+
+    - name: Ensure .well-known directory exists
+      ansible.builtin.file:
+        path: "{{ media_root }}/.well-known"
+        state: directory
+        mode: '0755'
+        owner: "{{ service_user }}"
+        group: "{{ service_group }}"
+
+    # Step 4: Configure nginx
+    - name: Copy nginx configuration
+      ansible.builtin.template:
+        src: "{{ repo_path }}/deploy/nginx/media.example.com.conf"
+        dest: "/etc/nginx/sites-available/{{ media_hostname }}.conf"
+        remote_src: true
+        owner: root
+        group: root
+      notify: test and reload nginx
+
+    - name: Create nginx sites-enabled symlink
+      ansible.builtin.file:
+        src: "/etc/nginx/sites-available/{{ media_hostname }}.conf"
+        dest: "/etc/nginx/sites-enabled/{{ media_hostname }}.conf"
+        state: link
+      notify: test and reload nginx
+
+    - name: Replace example hostname in nginx config
+      ansible.builtin.replace:
+        path: "/etc/nginx/sites-available/{{ media_hostname }}.conf"
+        regexp: 'media\.example\.com'
+        replace: "{{ media_hostname }}"
+      notify: test and reload nginx
+
+    # Step 5: Configure systemd service
+    - name: Copy systemd service unit
+      ansible.builtin.copy:
+        src: "{{ repo_path }}/deploy/systemd/emom-gallery-manifest.service"
+        dest: "/etc/systemd/system/emom-gallery-manifest.service"
+        owner: root
+        group: root
+        remote_src: true
+
+    - name: Update systemd service with correct paths and user
+      ansible.builtin.replace:
+        path: "/etc/systemd/system/emom-gallery-manifest.service"
+        regexp: "{{ item.regexp }}"
+        replace: "{{ item.replace }}"
+      loop:
+        - regexp: '^User=.*$'
+          replace: "User={{ service_user }}"
+        - regexp: '^Group=.*$'
+          replace: "Group={{ service_group }}"
+        - regexp: 'WorkingDirectory=.*'
+          replace: "WorkingDirectory={{ repo_path }}"
+        - regexp: '--base-url .*'
+          replace: "--base-url https://{{ media_hostname }}"
+        - regexp: '--root /[^ ]*'
+          replace: "--root {{ media_root }}"
+      notify: reload systemd and restart service
+
+    - name: Reload systemd daemon
+      ansible.builtin.systemd:
+        daemon_reload: true
+
+    # Step 6: Generate manifest manually first
+    - name: Generate initial manifest
+      ansible.builtin.command: >
+        python3 {{ repo_path }}/scripts/generate_manifest.py
+        --root {{ media_root }}
+        --base-url https://{{ media_hostname }}
+        --output {{ media_root }}/.well-known/gallery-manifest.json
+      become_user: "{{ service_user }}"
+      become: true
+
+    # Step 7: Enable and start the service
+    - name: Enable emom-gallery-manifest service
+      ansible.builtin.systemd:
+        name: emom-gallery-manifest
+        enabled: true
+        state: started
+
+    # Step 8: Verify deployment
+    - name: Verify manifest file was created
+      ansible.builtin.stat:
+        path: "{{ media_root }}/.well-known/gallery-manifest.json"
+      register: manifest_file
+
+    - name: Display manifest creation status
+      ansible.builtin.debug:
+        msg: "Manifest file created successfully at {{ media_root }}/.well-known/gallery-manifest.json"
+      when: manifest_file.stat.exists
+
+    - name: Test nginx configuration
+      ansible.builtin.command: nginx -t
+      register: nginx_test
+      changed_when: false
+
+    - name: Display nginx test result
+      ansible.builtin.debug:
+        msg: "{{ nginx_test.stderr }}"
+
+  handlers:
+    - name: Test and reload nginx
+      ansible.builtin.command: nginx -t
+      changed_when: false
+
+    - name: Reload systemd and restart service
+      block:
+        - name: Reload systemd
+          ansible.builtin.systemd:
+            daemon_reload: true
+        - name: Restart service
+          ansible.builtin.systemd:
+            name: emom-gallery-manifest
+            state: restarted
+
+    - name: Reload nginx
+      ansible.builtin.systemd:
+        name: nginx
+        state: reloaded
