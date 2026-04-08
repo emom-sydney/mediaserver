@@ -121,3 +121,7 @@ Frontend integration draft:
 Security note:
 
 - The upload vhost supports nginx basic auth (`uploads_basic_auth_*` vars in `playbook.yml`).
+
+Validation:
+
+- Run `deploy/SMOKE_TEST.md` after deployment.

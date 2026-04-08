@@ -112,6 +112,14 @@ Then edit:
 - CORS origin (tighten from `*` to your frontend origin)
 - basic auth file path/realm if needed (`auth_basic`, `auth_basic_user_file`)
 
+In Ansible defaults, CORS origin is derived as:
+
+- `uploads_cors_origin = https://{{ uploads_hostname }}:{{ uploads_port_https }}`
+
+The upload UI endpoint default is also derived:
+
+- `uploads_endpoint_default = https://{{ uploads_hostname }}:{{ uploads_port_https }}/files/`
+
 Enable the site and reload nginx.
 
 This vhost serves the upload UI at `/` (from `deploy/upload-ui`) and proxies tus at `/files/`.
@@ -189,3 +197,9 @@ The UI includes server polling feedback via `/notify/batch/<batch_id>` to show:
 - waiting for first completed file
 - server-side batch completion
 - admin email dispatch timestamp
+
+### G. Smoke test
+
+Run:
+
+- `deploy/SMOKE_TEST.md`

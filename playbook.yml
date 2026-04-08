@@ -9,7 +9,9 @@
     media_hostname: "media.example.com"  # Update with actual hostname
     uploads_enabled: true
     uploads_hostname: "uploads.media.example.com"
-    uploads_cors_origin: "*"
+    uploads_port_https: 909
+    uploads_cors_origin: "https://{{ uploads_hostname }}:{{ uploads_port_https }}"
+    uploads_endpoint_default: "https://{{ uploads_hostname }}:{{ uploads_port_https }}/files/"
     uploads_basic_auth_enabled: true
     uploads_basic_auth_realm: "EMOM Upload Console"
     uploads_basic_auth_file: "/etc/nginx/.htpasswd_uploads"
@@ -143,7 +145,7 @@
     - name: Configure upload CORS origin
       ansible.builtin.replace:
         path: "/etc/nginx/sites-available/{{ uploads_hostname }}.conf"
-        regexp: 'Access-Control-Allow-Origin "\*"'
+        regexp: 'Access-Control-Allow-Origin ".*"'
         replace: 'Access-Control-Allow-Origin "{{ uploads_cors_origin }}"'
       when: uploads_enabled
       notify: test and reload nginx
@@ -185,6 +187,13 @@
         replace: "root {{ repo_path }}/deploy/upload-ui;"
       when: uploads_enabled
       notify: test and reload nginx
+
+    - name: Configure upload UI default endpoint
+      ansible.builtin.replace:
+        path: "{{ repo_path }}/deploy/upload-ui/index.html"
+        regexp: 'value="https://[^"]*/files/"'
+        replace: 'value="{{ uploads_endpoint_default }}"'
+      when: uploads_enabled
 
     - name: Create uploads nginx sites-enabled symlink
       ansible.builtin.file:
