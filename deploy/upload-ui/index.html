@@ -1,0 +1,89 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>EMOM Upload Console</title>
+  <link rel="stylesheet" href="/upload.css" />
+</head>
+<body>
+  <main class="app">
+    <header class="hero">
+      <h1>EMOM Upload Console</h1>
+      <p>Resumable large-file uploads to <code>/media/emom_2tb/incoming</code>.</p>
+    </header>
+
+    <section class="panel controls">
+      <div class="grid">
+        <label>
+          Upload Endpoint
+          <input id="endpoint" type="url" value="https://uploads.media.emom.me:909/files/" />
+        </label>
+        <label>
+          Uploader
+          <input id="uploader" type="text" placeholder="name or email" />
+        </label>
+        <label>
+          Batch Name (optional)
+          <input id="batchName" type="text" placeholder="e.g. gig-2026-04-08" />
+        </label>
+        <label>
+          Concurrency
+          <input id="concurrency" type="number" min="1" max="6" value="3" />
+        </label>
+        <label>
+          Chunk Size (MiB)
+          <input id="chunkMiB" type="number" min="8" max="256" value="64" />
+        </label>
+      </div>
+
+      <div class="picker-row">
+        <label class="btn" for="fileInput">Choose Files</label>
+        <input id="fileInput" type="file" multiple />
+
+        <label class="btn" for="folderInput">Choose Folder</label>
+        <input id="folderInput" type="file" webkitdirectory directory multiple />
+
+        <button id="startBtn" class="btn primary" type="button">Start Upload</button>
+        <button id="pauseBtn" class="btn" type="button">Pause</button>
+        <button id="resumeBtn" class="btn" type="button">Resume</button>
+        <button id="clearBtn" class="btn danger" type="button">Clear Queue</button>
+      </div>
+
+      <div id="dropzone" class="dropzone" tabindex="0">
+        Drag and drop files or folders here
+      </div>
+
+      <div class="summary">
+        <span id="summaryText">No files queued.</span>
+        <span id="serverBatchText" class="server-batch">Server batch status: not started</span>
+        <progress id="overallProgress" max="100" value="0"></progress>
+      </div>
+    </section>
+
+    <section class="panel">
+      <h2>Queue</h2>
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr>
+              <th>File</th>
+              <th>Size</th>
+              <th>Status</th>
+              <th>Progress</th>
+            </tr>
+          </thead>
+          <tbody id="queueBody"></tbody>
+        </table>
+      </div>
+    </section>
+
+    <section class="panel">
+      <h2>Log</h2>
+      <pre id="log"></pre>
+    </section>
+  </main>
+
+  <script type="module" src="/upload.js"></script>
+</body>
+</html>

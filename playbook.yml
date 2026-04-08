@@ -1,19 +1,43 @@
 ---
 - name: Deploy EMOM Media Server
   hosts: all
-  become: yes
+  become: true
   vars:
     media_root: /media/emom_2tb
     repo_path: /opt/emom/mediaserver
     repo_url: "https://github.com/your-org/mediaserver.git"  # Update with actual repo URL
     media_hostname: "media.example.com"  # Update with actual hostname
+    uploads_enabled: true
+    uploads_hostname: "uploads.media.example.com"
+    uploads_cors_origin: "*"
+    uploads_basic_auth_enabled: true
+    uploads_basic_auth_realm: "EMOM Upload Console"
+    uploads_basic_auth_file: "/etc/nginx/.htpasswd_uploads"
+    uploads_basic_auth_user: "uploader"
+    uploads_basic_auth_password_hash: "CHANGE_ME"
+    tusd_binary_path: /usr/local/bin/tusd
+    uploads_ingest_dir: "{{ media_root }}/incoming"
+    upload_notify_bind_host: 127.0.0.1
+    upload_notify_bind_port: 9100
+    upload_notify_state_dir: /var/lib/emom-upload-notify
+    upload_notify_state_db_path: "{{ upload_notify_state_dir }}/state.db"
+    upload_notify_flush_interval_seconds: 30
+    upload_notify_quiet_seconds: 900
+    upload_notify_smtp_host: "smtp.example.com"
+    upload_notify_smtp_port: 587
+    upload_notify_smtp_user: "mailer-user"
+    upload_notify_smtp_pass: "mailer-password"
+    upload_notify_smtp_starttls: "true"
+    upload_notify_from: "uploads@media.emom.me"
+    upload_notify_to: "admin@emom.me"
+    upload_notify_subject_prefix: "EMOM Upload"
     service_user: www-data
     service_group: www-data
 
   tasks:
     # Step 1: Install runtime dependencies
     - name: Update apt cache
-      apt:
+      ansible.builtin.package:
         update_cache: true
         cache_valid_time: 3600
 
@@ -58,6 +82,14 @@
         owner: "{{ service_user }}"
         group: "{{ service_group }}"
 
+    - name: Ensure incoming subdirectory exists
+      ansible.builtin.file:
+        path: "{{ uploads_ingest_dir }}"
+        state: directory
+        mode: '0755'
+        owner: "{{ service_user }}"
+        group: "{{ service_group }}"
+
     - name: Ensure .well-known directory exists
       ansible.builtin.file:
         path: "{{ media_root }}/.well-known"
@@ -68,7 +100,7 @@
 
     # Step 4: Configure nginx
     - name: Copy nginx configuration
-      ansible.builtin.template:
+      ansible.builtin.copy:
         src: "{{ repo_path }}/deploy/nginx/media.example.com.conf"
         dest: "/etc/nginx/sites-available/{{ media_hostname }}.conf"
         remote_src: true
@@ -88,6 +120,78 @@
         path: "/etc/nginx/sites-available/{{ media_hostname }}.conf"
         regexp: 'media\.example\.com'
         replace: "{{ media_hostname }}"
+      notify: test and reload nginx
+
+    - name: Copy uploads nginx configuration
+      ansible.builtin.copy:
+        src: "{{ repo_path }}/deploy/nginx/uploads.media.example.com.conf"
+        dest: "/etc/nginx/sites-available/{{ uploads_hostname }}.conf"
+        remote_src: true
+        owner: root
+        group: root
+      when: uploads_enabled
+      notify: test and reload nginx
+
+    - name: Replace example upload hostname in nginx config
+      ansible.builtin.replace:
+        path: "/etc/nginx/sites-available/{{ uploads_hostname }}.conf"
+        regexp: 'uploads\.media\.example\.com'
+        replace: "{{ uploads_hostname }}"
+      when: uploads_enabled
+      notify: test and reload nginx
+
+    - name: Configure upload CORS origin
+      ansible.builtin.replace:
+        path: "/etc/nginx/sites-available/{{ uploads_hostname }}.conf"
+        regexp: 'Access-Control-Allow-Origin "\*"'
+        replace: 'Access-Control-Allow-Origin "{{ uploads_cors_origin }}"'
+      when: uploads_enabled
+      notify: test and reload nginx
+
+    - name: Configure upload basic auth realm
+      ansible.builtin.replace:
+        path: "/etc/nginx/sites-available/{{ uploads_hostname }}.conf"
+        regexp: 'auth_basic "EMOM Upload Console";'
+        replace: 'auth_basic "{{ uploads_basic_auth_realm }}";'
+      when:
+        - uploads_enabled
+        - uploads_basic_auth_enabled
+      notify: test and reload nginx
+
+    - name: Configure upload basic auth password file path
+      ansible.builtin.replace:
+        path: "/etc/nginx/sites-available/{{ uploads_hostname }}.conf"
+        regexp: 'auth_basic_user_file /etc/nginx/.htpasswd_uploads;'
+        replace: "auth_basic_user_file {{ uploads_basic_auth_file }};"
+      when:
+        - uploads_enabled
+        - uploads_basic_auth_enabled
+      notify: test and reload nginx
+
+    - name: Disable upload basic auth when configured off
+      ansible.builtin.replace:
+        path: "/etc/nginx/sites-available/{{ uploads_hostname }}.conf"
+        regexp: 'auth_basic ".*";'
+        replace: "auth_basic off;"
+      when:
+        - uploads_enabled
+        - not uploads_basic_auth_enabled
+      notify: test and reload nginx
+
+    - name: Configure upload UI root path
+      ansible.builtin.replace:
+        path: "/etc/nginx/sites-available/{{ uploads_hostname }}.conf"
+        regexp: 'root /opt/emom/mediaserver/deploy/upload-ui;'
+        replace: "root {{ repo_path }}/deploy/upload-ui;"
+      when: uploads_enabled
+      notify: test and reload nginx
+
+    - name: Create uploads nginx sites-enabled symlink
+      ansible.builtin.file:
+        src: "/etc/nginx/sites-available/{{ uploads_hostname }}.conf"
+        dest: "/etc/nginx/sites-enabled/{{ uploads_hostname }}.conf"
+        state: link
+      when: uploads_enabled
       notify: test and reload nginx
 
     # Step 5: Configure systemd service
@@ -117,6 +221,147 @@
           replace: "--root {{ media_root }}"
       notify: reload systemd and restart service
 
+    - name: Check if tusd binary exists
+      ansible.builtin.stat:
+        path: "{{ tusd_binary_path }}"
+      register: tusd_binary
+      when: uploads_enabled
+
+    - name: Fail when uploads basic auth is enabled without password hash
+      ansible.builtin.fail:
+        msg: "Set uploads_basic_auth_password_hash to an htpasswd hash before enabling uploads_basic_auth."
+      when:
+        - uploads_enabled
+        - uploads_basic_auth_enabled
+        - uploads_basic_auth_password_hash == "CHANGE_ME"
+
+    - name: Install uploads basic auth file
+      ansible.builtin.copy:
+        dest: "{{ uploads_basic_auth_file }}"
+        content: "{{ uploads_basic_auth_user }}:{{ uploads_basic_auth_password_hash }}\n"
+        owner: root
+        group: "{{ service_group }}"
+        mode: '0640'
+      when:
+        - uploads_enabled
+        - uploads_basic_auth_enabled
+      notify: test and reload nginx
+
+    - name: Fail when uploads are enabled but tusd is missing
+      ansible.builtin.fail:
+        msg: "tusd binary is missing at {{ tusd_binary_path }}. Install tusd first or set uploads_enabled=false."
+      when:
+        - uploads_enabled
+        - not tusd_binary.stat.exists
+
+    - name: Copy tusd service unit
+      ansible.builtin.copy:
+        src: "{{ repo_path }}/deploy/systemd/tusd.service"
+        dest: "/etc/systemd/system/tusd.service"
+        owner: root
+        group: root
+        remote_src: true
+      when: uploads_enabled
+      notify: reload systemd and restart upload services
+
+    - name: Configure tusd service settings
+      ansible.builtin.replace:
+        path: "/etc/systemd/system/tusd.service"
+        regexp: "{{ item.regexp }}"
+        replace: "{{ item.replace }}"
+      loop:
+        - regexp: '^User=.*$'
+          replace: "User={{ service_user }}"
+        - regexp: '^Group=.*$'
+          replace: "Group={{ service_group }}"
+        - regexp: '-upload-dir=[^ ]*'
+          replace: "-upload-dir={{ uploads_ingest_dir }}"
+        - regexp: '-hooks-http=[^ ]*'
+          replace: "-hooks-http=http://{{ upload_notify_bind_host }}:{{ upload_notify_bind_port }}/hooks"
+      when: uploads_enabled
+      notify: reload systemd and restart upload services
+
+    - name: Copy upload notify service unit
+      ansible.builtin.copy:
+        src: "{{ repo_path }}/deploy/systemd/emom-upload-notify.service"
+        dest: "/etc/systemd/system/emom-upload-notify.service"
+        owner: root
+        group: root
+        remote_src: true
+      when: uploads_enabled
+      notify: reload systemd and restart upload services
+
+    - name: Configure upload notify service settings
+      ansible.builtin.replace:
+        path: "/etc/systemd/system/emom-upload-notify.service"
+        regexp: "{{ item.regexp }}"
+        replace: "{{ item.replace }}"
+      loop:
+        - regexp: '^User=.*$'
+          replace: "User={{ service_user }}"
+        - regexp: '^Group=.*$'
+          replace: "Group={{ service_group }}"
+        - regexp: '^WorkingDirectory=.*$'
+          replace: "WorkingDirectory={{ repo_path }}"
+        - regexp: '^ExecStart=.*$'
+          replace: "ExecStart=/usr/bin/env python3 {{ repo_path }}/scripts/upload_notify_service.py"
+      when: uploads_enabled
+      notify: reload systemd and restart upload services
+
+    - name: Copy upload notify environment file
+      ansible.builtin.copy:
+        src: "{{ repo_path }}/deploy/systemd/emom-upload-notify.env.example"
+        dest: "/etc/default/emom-upload-notify"
+        owner: root
+        group: root
+        remote_src: true
+      when: uploads_enabled
+      notify: reload systemd and restart upload services
+
+    - name: Configure upload notify environment
+      ansible.builtin.replace:
+        path: "/etc/default/emom-upload-notify"
+        regexp: "{{ item.regexp }}"
+        replace: "{{ item.replace }}"
+      loop:
+        - regexp: '^BIND_HOST=.*$'
+          replace: "BIND_HOST={{ upload_notify_bind_host }}"
+        - regexp: '^BIND_PORT=.*$'
+          replace: "BIND_PORT={{ upload_notify_bind_port }}"
+        - regexp: '^STATE_DB_PATH=.*$'
+          replace: "STATE_DB_PATH={{ upload_notify_state_db_path }}"
+        - regexp: '^FLUSH_INTERVAL_SECONDS=.*$'
+          replace: "FLUSH_INTERVAL_SECONDS={{ upload_notify_flush_interval_seconds }}"
+        - regexp: '^BATCH_QUIET_SECONDS=.*$'
+          replace: "BATCH_QUIET_SECONDS={{ upload_notify_quiet_seconds }}"
+        - regexp: '^SMTP_HOST=.*$'
+          replace: "SMTP_HOST={{ upload_notify_smtp_host }}"
+        - regexp: '^SMTP_PORT=.*$'
+          replace: "SMTP_PORT={{ upload_notify_smtp_port }}"
+        - regexp: '^SMTP_USER=.*$'
+          replace: "SMTP_USER={{ upload_notify_smtp_user }}"
+        - regexp: '^SMTP_PASS=.*$'
+          replace: "SMTP_PASS={{ upload_notify_smtp_pass }}"
+        - regexp: '^SMTP_STARTTLS=.*$'
+          replace: "SMTP_STARTTLS={{ upload_notify_smtp_starttls }}"
+        - regexp: '^NOTIFY_FROM=.*$'
+          replace: "NOTIFY_FROM={{ upload_notify_from }}"
+        - regexp: '^NOTIFY_TO=.*$'
+          replace: "NOTIFY_TO={{ upload_notify_to }}"
+        - regexp: '^NOTIFY_SUBJECT_PREFIX=.*$'
+          replace: "NOTIFY_SUBJECT_PREFIX={{ upload_notify_subject_prefix }}"
+      when: uploads_enabled
+      notify: reload systemd and restart upload services
+
+    - name: Ensure upload notify state directory exists
+      ansible.builtin.file:
+        path: "{{ upload_notify_state_dir }}"
+        state: directory
+        mode: '0755'
+        owner: "{{ service_user }}"
+        group: "{{ service_group }}"
+      when: uploads_enabled
+
     - name: Reload systemd daemon
       ansible.builtin.systemd:
         daemon_reload: true
@@ -137,6 +382,20 @@
         name: emom-gallery-manifest
         enabled: true
         state: started
+
+    - name: Enable and start tusd service
+      ansible.builtin.systemd:
+        name: tusd
+        enabled: true
+        state: started
+      when: uploads_enabled
+
+    - name: Enable and start upload notify service
+      ansible.builtin.systemd:
+        name: emom-upload-notify
+        enabled: true
+        state: started
+      when: uploads_enabled
 
     # Step 8: Verify deployment
     - name: Verify manifest file was created
@@ -159,11 +418,17 @@
         msg: "{{ nginx_test.stderr }}"
 
   handlers:
-    - name: Test and reload nginx
-      ansible.builtin.command: nginx -t
-      changed_when: false
+    - name: test and reload nginx
+      block:
+        - name: Test nginx
+          ansible.builtin.command: nginx -t
+          changed_when: false
+        - name: Reload nginx
+          ansible.builtin.systemd:
+            name: nginx
+            state: reloaded
 
-    - name: Reload systemd and restart service
+    - name: reload systemd and restart service
       block:
         - name: Reload systemd
           ansible.builtin.systemd:
@@ -173,7 +438,18 @@
             name: emom-gallery-manifest
             state: restarted
 
-    - name: Reload nginx
-      ansible.builtin.systemd:
-        name: nginx
-        state: reloaded
+    - name: reload systemd and restart upload services
+      block:
+        - name: Reload systemd for uploads
+          ansible.builtin.systemd:
+            daemon_reload: true
+        - name: Restart tusd
+          ansible.builtin.systemd:
+            name: tusd
+            state: restarted
+          when: uploads_enabled
+        - name: Restart upload notifier
+          ansible.builtin.systemd:
+            name: emom-upload-notify
+            state: restarted
+          when: uploads_enabled

@@ -45,6 +45,8 @@ The top-level document also includes metadata about when and how it was built.
   - sample unit files
 - `deploy/nginx/`
   - sample nginx configuration
+- `deploy/upload-ui/`
+  - lightweight vanilla upload frontend for tus ingest
 
 ## Requirements On The Server
 
@@ -76,3 +78,46 @@ scripts/watch_manifest.sh \
 - The generator ignores the manifest itself and temporary manifest files.
 - Hidden directories are not excluded by default, except for `.well-known`.
 - `storageClass` is hard-coded to `STANDARD` because the nginx-backed setup is replacing S3 storage classes.
+- TODO: Create ansible templates for templateable files
+
+## Resumable Uploads (Large Files)
+
+This repo now includes an upload stack based on `tusd` behind nginx for multi-GB uploads:
+
+- nginx upload vhost template:
+  - `deploy/nginx/uploads.media.example.com.conf`
+- `tusd` systemd unit:
+  - `deploy/systemd/tusd.service`
+- hook-driven batch completion notifier:
+  - `scripts/upload_notify_service.py`
+  - `deploy/systemd/emom-upload-notify.service`
+  - `deploy/systemd/emom-upload-notify.env.example`
+
+Recommended ingest path:
+
+- `/media/emom_2tb/incoming`
+
+### Batch Completion Email Behavior
+
+The notifier sends one email per batch when either:
+
+- `completed_files >= batch_total` (preferred, deterministic), or
+- no new finished uploads arrive for `BATCH_QUIET_SECONDS` (fallback mode)
+
+Client uploads should include tus metadata on each file:
+
+- `batch_id` (required for grouping)
+- `batch_total` (recommended)
+- `batch_name` (optional)
+- `relative_path` (optional, useful for folder uploads)
+- `filename` (optional)
+- `uploader` (optional)
+
+Frontend integration draft:
+
+- `deploy/FRONTEND_UPLOAD_DRAFT.md`
+- `deploy/upload-ui/` (implemented vanilla uploader with batch status polling)
+
+Security note:
+
+- The upload vhost supports nginx basic auth (`uploads_basic_auth_*` vars in `playbook.yml`).

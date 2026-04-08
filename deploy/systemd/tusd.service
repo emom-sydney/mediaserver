@@ -1,0 +1,25 @@
+[Unit]
+Description=tusd resumable upload server
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=www-data
+Group=www-data
+EnvironmentFile=-/etc/default/tusd
+ExecStart=/usr/local/bin/tusd \
+  -host=127.0.0.1 \
+  -port=1080 \
+  -base-path=/files/ \
+  -upload-dir=/media/emom_2tb/incoming \
+  -max-size=0 \
+  -hooks-http=http://127.0.0.1:9100/hooks \
+  -hooks-enabled-events=post-finish \
+  -behind-proxy
+Restart=always
+RestartSec=5
+LimitNOFILE=65535
+
+[Install]
+WantedBy=multi-user.target

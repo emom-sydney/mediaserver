@@ -1,0 +1,17 @@
+[Unit]
+Description=EMOM upload completion notifier
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=www-data
+Group=www-data
+EnvironmentFile=/etc/default/emom-upload-notify
+WorkingDirectory=/opt/emom/mediaserver
+ExecStart=/usr/bin/env python3 /opt/emom/mediaserver/scripts/upload_notify_service.py
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
