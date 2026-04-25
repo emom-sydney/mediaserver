@@ -19,6 +19,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import shutil
 import sqlite3
 import threading
 import time
@@ -267,8 +268,87 @@ class Notifier:
             logging.info("Sent completion email for batch_id=%s", batch_id)
 
 
+class UploadFinalizer:
+    def __init__(self) -> None:
+        self.enabled = env("FINALIZE_UPLOADS", "false").lower() == "true"
+        self.upload_dir = Path(env("TUSD_UPLOAD_DIR", "/media/emom_2tb/incoming"))
+        self.final_dir = Path(env("FINAL_UPLOAD_DIR", "/media/emom_2tb/final"))
+        self.keep_info_files = env("KEEP_TUSD_INFO_FILES", "false").lower() == "true"
+
+        if not self.enabled:
+            return
+
+        self.upload_dir.mkdir(parents=True, exist_ok=True)
+        self.final_dir.mkdir(parents=True, exist_ok=True)
+        logging.info(
+            "Upload finalizer enabled: upload_dir=%s final_dir=%s keep_info=%s",
+            self.upload_dir,
+            self.final_dir,
+            self.keep_info_files,
+        )
+
+    @staticmethod
+    def _safe_target_path(relative_path: str, filename: str, upload_id: str) -> Path:
+        raw = (relative_path or filename or upload_id).strip().replace("\\", "/")
+        raw = raw.lstrip("/")
+        parts = [part for part in Path(raw).parts if part not in ("", ".")]
+        if any(part == ".." for part in parts):
+            raise ValueError(f"unsafe destination path: {raw!r}")
+        if not parts:
+            return Path(upload_id)
+        return Path(*parts)
+
+    @staticmethod
+    def _dedupe_path(path: Path, upload_id: str) -> Path:
+        if not path.exists():
+            return path
+        stem = path.stem
+        suffix = path.suffix
+        return path.with_name(f"{stem}.{upload_id}{suffix}")
+
+    @staticmethod
+    def _safe_uploader_dirname(uploader: str) -> str:
+        raw = (uploader or "").strip()
+        if not raw:
+            return "unknown-uploader"
+
+        # Keep uploader folders human-readable while rejecting path separators.
+        cleaned = raw.replace("/", " ").replace("\\", " ")
+        safe = "".join(ch if ch.isalnum() or ch in ("-", "_", ".") else "_" for ch in cleaned).strip("._")
+        if not safe or safe in (".", ".."):
+            return "unknown-uploader"
+        return safe
+
+    def finalize_upload(self, *, upload_id: str, filename: str, relative_path: str, uploader: str) -> Optional[Path]:
+        if not self.enabled:
+            return None
+
+        src_data = self.upload_dir / upload_id
+        src_info = self.upload_dir / f"{upload_id}.info"
+        if not src_data.exists():
+            logging.warning("Finalize skipped, source upload missing: %s", src_data)
+            return None
+
+        rel_target = self._safe_target_path(relative_path, filename, upload_id)
+        uploader_dir = self._safe_uploader_dirname(uploader)
+        dst_data = self._dedupe_path(self.final_dir / uploader_dir / rel_target, upload_id)
+        dst_data.parent.mkdir(parents=True, exist_ok=True)
+
+        shutil.move(str(src_data), str(dst_data))
+        if src_info.exists():
+            if self.keep_info_files:
+                dst_info = dst_data.with_name(f"{dst_data.name}.tusd.info")
+                shutil.move(str(src_info), str(dst_info))
+            else:
+                src_info.unlink(missing_ok=True)
+
+        logging.info("Finalized upload_id=%s to %s", upload_id, dst_data)
+        return dst_data
+
+
 class HookHandler(BaseHTTPRequestHandler):
     db: BatchDB
+    finalizer: UploadFinalizer
 
     def _json_response(self, code: int, payload: Dict[str, Any]) -> None:
         body = json.dumps(payload).encode("utf-8")
@@ -373,6 +453,15 @@ class HookHandler(BaseHTTPRequestHandler):
             expected_total=expected_total,
         )
         logging.info("Recorded finished upload upload_id=%s batch_id=%s", upload_id, batch_id)
+        try:
+            self.finalizer.finalize_upload(
+                upload_id=upload_id,
+                filename=filename,
+                relative_path=relative_path,
+                uploader=uploader,
+            )
+        except Exception as exc:  # noqa: BLE001
+            logging.exception("Failed to finalize upload_id=%s: %s", upload_id, exc)
 
     def log_message(self, format: str, *args: Any) -> None:
         logging.info("HTTP %s", format % args)
@@ -395,6 +484,7 @@ def main() -> None:
 
     db = BatchDB(env("STATE_DB_PATH", "/var/lib/emom-upload-notify/state.db"))
     notifier = Notifier(db)
+    finalizer = UploadFinalizer()
 
     interval_seconds = int(env("FLUSH_INTERVAL_SECONDS", "30"))
     thread = threading.Thread(target=start_flush_loop, args=(notifier, interval_seconds), daemon=True)
@@ -404,6 +494,7 @@ def main() -> None:
     port = int(env("BIND_PORT", "9100"))
 
     HookHandler.db = db
+    HookHandler.finalizer = finalizer
     server = ThreadingHTTPServer((host, port), HookHandler)
     logging.info("Upload notify service listening on %s:%s", host, port)
     server.serve_forever()

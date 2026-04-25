@@ -295,6 +295,12 @@ function startBatch() {
     log("Missing upload endpoint.");
     return;
   }
+  const uploader = els.uploader.value.trim();
+  if (!uploader) {
+    log("Uploader name is required.");
+    els.uploader.focus();
+    return;
+  }
   if (!state.items.length) {
     log("No files in queue.");
     return;

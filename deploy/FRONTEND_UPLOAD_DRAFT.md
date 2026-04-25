@@ -34,6 +34,8 @@ The upload vhost serves this UI from `/` and proxies tus traffic at `/files/`.
 - `batch_total`
 - `batch_name`
 
+`uploader` is required by the bundled UI before upload can start.
+
 ## Endpoint
 
 Default in the UI:

@@ -96,6 +96,8 @@ This repo now includes an upload stack based on `tusd` behind nginx for multi-GB
 Recommended ingest path:
 
 - `/media/emom_2tb/incoming`
+- optional finalized path:
+  - `/media/emom_2tb/final`
 
 ### Batch Completion Email Behavior
 
@@ -111,7 +113,7 @@ Client uploads should include tus metadata on each file:
 - `batch_name` (optional)
 - `relative_path` (optional, useful for folder uploads)
 - `filename` (optional)
-- `uploader` (optional)
+- `uploader` (required in the bundled frontend; recommended for all clients)
 
 Frontend integration draft:
 
@@ -125,3 +127,26 @@ Security note:
 Validation:
 
 - Run `deploy/SMOKE_TEST.md` after deployment.
+
+### Optional Upload Finalization (Rename/Move)
+
+`tusd` stores file data as upload IDs (`<id>` and `<id>.info`), not original filenames.
+The notify service can optionally move completed files into final names/paths after
+`post-finish` hooks.
+
+Env vars in `emom-upload-notify`:
+
+- `FINALIZE_UPLOADS=true` to enable
+- `TUSD_UPLOAD_DIR=/media/emom_2tb/incoming` source directory for `<id>` files
+- `FINAL_UPLOAD_DIR=/media/emom_2tb/final` destination root
+- `KEEP_TUSD_INFO_FILES=true|false` whether to keep sidecar metadata files
+
+When finalization is enabled, files are moved to:
+
+- `FINAL_UPLOAD_DIR/<uploader>/<relative_path-or-filename>`
+
+Uploader names are sanitized to a safe directory name. If uploader metadata is
+missing, files are placed under `unknown-uploader/`.
+
+Recommended pattern is to treat `incoming` as staging and write user-facing files
+to a separate final directory.
