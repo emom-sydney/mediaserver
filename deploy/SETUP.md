@@ -6,7 +6,14 @@ On the media server:
 
 ```bash
 apt-get update
-apt-get install -y python3 inotify-tools nginx
+apt-get install -y python3 python3-venv inotify-tools nginx
+```
+
+## 1a. Set Up Python Virtual Environment
+
+```bash
+python3 -m venv /opt/emom/venv
+/opt/emom/venv/bin/pip install -r /opt/emom/mediaserver/requirements.txt
 ```
 
 ## 2. Deploy This Repo
@@ -69,7 +76,7 @@ systemctl enable --now emom-gallery-manifest.service
 Generate once manually:
 
 ```bash
-python3 /opt/emom/mediaserver/scripts/generate_manifest.py \
+/opt/emom/venv/bin/python3 /opt/emom/mediaserver/scripts/generate_manifest.py \
   --root /media/emom_2tb \
   --base-url https://media.example.com \
   --output /media/emom_2tb/.well-known/gallery-manifest.json

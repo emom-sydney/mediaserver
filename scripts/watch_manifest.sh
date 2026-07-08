@@ -21,7 +21,7 @@ if ! command -v inotifywait >/dev/null 2>&1; then
 fi
 
 generate() {
-  python3 "${GENERATOR}" \
+  /opt/emom/venv/bin/python3 "${GENERATOR}" \
     --root "${MEDIA_ROOT}" \
     --base-url "${BASE_URL}" \
     --output "${OUTPUT_PATH}" \
