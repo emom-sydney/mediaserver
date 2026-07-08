@@ -2,4 +2,6 @@
 
 ## Open
 
-- [ ] thumbnail generation
+## Done
+- [x] thumbnail generation
+- [x] update/fix ansible playbook

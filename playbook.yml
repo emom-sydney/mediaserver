@@ -48,6 +48,7 @@
         name:
           - python3
           - python3-pip
+          - python3-venv
           - inotify-tools
           - nginx
           - git
@@ -67,6 +68,18 @@
         version: main
       register: git_clone
 
+    # Step 2a: Set up Python virtual environment
+    - name: Create Python virtual environment
+      ansible.builtin.command:
+        cmd: python3 -m venv /opt/emom/venv
+        creates: /opt/emom/venv/bin/python3
+
+    - name: Install Python dependencies into venv
+      ansible.builtin.pip:
+        requirements: "{{ repo_path }}/requirements.txt"
+        virtualenv: /opt/emom/venv
+        virtualenv_python: python3
+
     # Step 3: Ensure media root and subdirectories exist
     - name: Ensure media root directory exists
       ansible.builtin.file:
@@ -79,6 +92,14 @@
     - name: Ensure gallery subdirectory exists
       ansible.builtin.file:
         path: "{{ media_root }}/gallery"
+        state: directory
+        mode: '0755'
+        owner: "{{ service_user }}"
+        group: "{{ service_group }}"
+
+    - name: Ensure thumbnail subdirectory exists
+      ansible.builtin.file:
+        path: "{{ media_root }}/thumbs"
         state: directory
         mode: '0755'
         owner: "{{ service_user }}"
@@ -230,6 +251,31 @@
           replace: "--root {{ media_root }}"
       notify: reload systemd and restart service
 
+    # Step 5b: Install thumbnail watcher service
+    - name: Copy thumbnail systemd service unit
+      ansible.builtin.copy:
+        src: "{{ repo_path }}/deploy/systemd/emom-gallery-thumbnails.service"
+        dest: "/etc/systemd/system/emom-gallery-thumbnails.service"
+        owner: root
+        group: root
+        remote_src: true
+
+    - name: Update thumbnail service with correct user and paths
+      ansible.builtin.replace:
+        path: "/etc/systemd/system/emom-gallery-thumbnails.service"
+        regexp: "{{ item.regexp }}"
+        replace: "{{ item.replace }}"
+      loop:
+        - regexp: '^User=.*$'
+          replace: "User={{ service_user }}"
+        - regexp: '^Group=.*$'
+          replace: "Group={{ service_group }}"
+        - regexp: 'WorkingDirectory=.*'
+          replace: "WorkingDirectory={{ repo_path }}/scripts"
+        - regexp: 'ExecStart=.*'
+          replace: "ExecStart=/opt/emom/venv/bin/python3 {{ repo_path }}/scripts/generate_thumbnails.py"
+      notify: reload systemd and restart thumbnail service
+
     - name: Check if tusd binary exists
       ansible.builtin.stat:
         path: "{{ tusd_binary_path }}"
@@ -313,7 +359,7 @@
         - regexp: '^WorkingDirectory=.*$'
           replace: "WorkingDirectory={{ repo_path }}"
         - regexp: '^ExecStart=.*$'
-          replace: "ExecStart=/usr/bin/env python3 {{ repo_path }}/scripts/upload_notify_service.py"
+          replace: "ExecStart=/opt/emom/venv/bin/python3 {{ repo_path }}/scripts/upload_notify_service.py"
       when: uploads_enabled
       notify: reload systemd and restart upload services
 
@@ -378,7 +424,7 @@
     # Step 6: Generate manifest manually first
     - name: Generate initial manifest
       ansible.builtin.command: >
-        python3 {{ repo_path }}/scripts/generate_manifest.py
+        /opt/emom/venv/bin/python3 {{ repo_path }}/scripts/generate_manifest.py
         --root {{ media_root }}
         --base-url https://{{ media_hostname }}
         --output {{ media_root }}/.well-known/gallery-manifest.json
@@ -389,6 +435,12 @@
     - name: Enable emom-gallery-manifest service
       ansible.builtin.systemd:
         name: emom-gallery-manifest
+        enabled: true
+        state: started
+
+    - name: Enable and start thumbnail watcher service
+      ansible.builtin.systemd:
+        name: emom-gallery-thumbnails
         enabled: true
         state: started
 
@@ -445,6 +497,16 @@
         - name: Restart service
           ansible.builtin.systemd:
             name: emom-gallery-manifest
+            state: restarted
+
+    - name: reload systemd and restart thumbnail service
+      block:
+        - name: Reload systemd for thumbnails
+          ansible.builtin.systemd:
+            daemon_reload: true
+        - name: Restart thumbnail service
+          ansible.builtin.systemd:
+            name: emom-gallery-thumbnails
             state: restarted
 
     - name: reload systemd and restart upload services
