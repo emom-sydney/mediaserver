@@ -1,0 +1,5 @@
+# TODO
+
+## Open
+
+- [ ] thumbnail generation
