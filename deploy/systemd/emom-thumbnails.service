@@ -1,0 +1,20 @@
+[Unit]
+Description=EMOM gallery thumbnail watcher
+After=local-fs.target
+
+[Service]
+Type=simple
+User=www-data
+Group=www-data
+WorkingDirectory=/opt/emom/mediaserver/scripts
+ExecStart=/opt/emom/venv/bin/python3 /opt/emom/mediaserver/scripts/generate_thumbnails.py
+Restart=always
+RestartSec=5
+
+# Limit CPU priority to reduce impact on the Pi under heavy load
+Nice=10
+IOSchedulingClass=best-effort
+IOSchedulingPriority=7
+
+[Install]
+WantedBy=multi-user.target

@@ -36,7 +36,16 @@ The output file will be written to:
 
 - `/media/emom_2tb/.well-known/gallery-manifest.json`
 
-The service user must be able to read the media tree and write into `.well-known`.
+Create the thumbnails directory and set ownership:
+
+```bash
+mkdir -p /media/emom_2tb/thumbs
+chown -R www-data:www-data /media/emom_2tb/thumbs
+```
+
+Thumbnails mirror the gallery structure under `/media/emom_2tb/thumbs/gallery/` with filenames like `photo.sm.jpg`, `photo.md.jpg`, `photo.lg.jpg`.
+
+The service user must be able to read the media tree and write into `.well-known` and `thumbs/`.
 
 ## 4. Configure nginx
 
@@ -50,25 +59,47 @@ You will need to:
 - add TLS separately
 - ensure nginx can read `/media/emom_2tb`
 
-## 5. Install systemd Service
+## 5. Install systemd Services
 
-Copy the sample unit:
+Copy both service units:
 
 ```bash
 cp /opt/emom/mediaserver/deploy/systemd/emom-gallery-manifest.service /etc/systemd/system/
+cp /opt/emom/mediaserver/deploy/systemd/emom-thumbnails.service /etc/systemd/system/
 ```
 
-Then edit:
+For `emom-gallery-manifest.service`, edit:
 
 - the `User` and `Group`
 - the repo path in `WorkingDirectory`
 - the public media hostname in `ExecStart`
 
-After that:
+Then enable both:
 
 ```bash
 systemctl daemon-reload
 systemctl enable --now emom-gallery-manifest.service
+systemctl enable --now emom-thumbnails.service
+```
+
+## 5a. Backfill Existing Thumbnails
+
+Since the gallery is already populated, run the backfill script once after the service is installed:
+
+```bash
+sudo -u www-data /opt/emom/mediaserver/scripts/backfill_thumbnails.sh
+```
+
+To preview what would be processed without writing anything:
+
+```bash
+sudo -u www-data /opt/emom/mediaserver/scripts/backfill_thumbnails.sh --dry-run
+```
+
+To force-regenerate all thumbnails (e.g. after changing sizes):
+
+```bash
+sudo -u www-data /opt/emom/mediaserver/scripts/backfill_thumbnails.sh --force
 ```
 
 ## 6. Test
@@ -91,7 +122,9 @@ curl http://media.example.com/.well-known/gallery-manifest.json
 
 ## Operational Notes
 
-- The watcher rebuilds after filesystem activity has been quiet for a few seconds.
+- The manifest watcher rebuilds after filesystem activity has been quiet for a few seconds.
+- The thumbnail watcher processes one image at a time to keep CPU load low on the Pi.
+- Thumbnail sizes and JPEG quality are configured at the top of `scripts/generate_thumbnails.py`. After changing them, re-run the backfill with `--force` and restart the service.
 - The generated JSON only includes files under the `gallery/` prefix by default.
 - The manifest file is replaced atomically to avoid partial reads.
 
