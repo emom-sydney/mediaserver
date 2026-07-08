@@ -10,7 +10,9 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 from tempfile import NamedTemporaryFile
-from typing import Iterator
+from typing import Iterator, Optional, Tuple
+
+from PIL import Image, UnidentifiedImageError
 
 
 DEFAULT_ROOT = "/media/emom_2tb"
@@ -101,6 +103,15 @@ def build_url(base_url: str, relative_key: str) -> str:
     return f"{base_url}/{relative_key}"
 
 
+def image_dimensions(path: Path) -> Optional[Tuple[int, int]]:
+    """Return (width, height) for image files, or None if not an image or unreadable."""
+    try:
+        with Image.open(path) as img:
+            return img.size  # (width, height)
+    except (UnidentifiedImageError, Exception):
+        return None
+
+
 def file_record(path: Path, config: Config) -> dict:
     rel = path.relative_to(config.root).as_posix()
     stat_result = path.stat()
@@ -119,6 +130,10 @@ def file_record(path: Path, config: Config) -> dict:
     mime_type, _ = mimetypes.guess_type(path.name)
     if mime_type:
         record["contentType"] = mime_type
+
+    dims = image_dimensions(path)
+    if dims is not None:
+        record["width"], record["height"] = dims
 
     return record
 
