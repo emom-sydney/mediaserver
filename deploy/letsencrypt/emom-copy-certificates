@@ -1,0 +1,30 @@
+#!/bin/sh
+set -eu
+
+umask 077
+
+EXPECTED_LINEAGE={{ certbot_lineage | quote }}
+DEPLOY_KEY={{ certbot_deploy_key_path | quote }}
+REMOTE={{ (internal_media_user ~ '@' ~ internal_media_host) | quote }}
+REMOTE_PORT={{ internal_media_port | quote }}
+REMOTE_CERT_DIR={{ internal_media_cert_dir | quote }}
+REMOTE_STAGING_DIR={{ internal_media_staging_dir | quote }}
+REMOTE_SU={{ internal_media_su_command | quote }}
+KNOWN_HOSTS={{ internal_media_ssh_known_hosts | quote }}
+
+if [ "${RENEWED_LINEAGE:-}" != "$EXPECTED_LINEAGE" ]; then
+    exit 0
+fi
+
+CERT="$RENEWED_LINEAGE/fullchain.pem"
+KEY="$RENEWED_LINEAGE/privkey.pem"
+[ -r "$CERT" ] && [ -r "$KEY" ]
+
+SSH="ssh -i $DEPLOY_KEY -o BatchMode=yes -o StrictHostKeyChecking=yes -o UserKnownHostsFile=$KNOWN_HOSTS -p $REMOTE_PORT"
+SCP="scp -i $DEPLOY_KEY -o BatchMode=yes -o StrictHostKeyChecking=yes -o UserKnownHostsFile=$KNOWN_HOSTS -P $REMOTE_PORT"
+
+$SSH "$REMOTE" "$REMOTE_SU 'mkdir -p $REMOTE_STAGING_DIR $REMOTE_CERT_DIR && chmod 700 $REMOTE_STAGING_DIR $REMOTE_CERT_DIR'"
+$SCP "$CERT" "$REMOTE:$REMOTE_STAGING_DIR/fullchain.pem.new"
+$SCP "$KEY" "$REMOTE:$REMOTE_STAGING_DIR/privkey.pem.new"
+
+$SSH "$REMOTE" "$REMOTE_SU 'install -o root -g root -m 0644 $REMOTE_STAGING_DIR/fullchain.pem.new $REMOTE_CERT_DIR/fullchain.pem && install -o root -g root -m 0600 $REMOTE_STAGING_DIR/privkey.pem.new $REMOTE_CERT_DIR/privkey.pem && rm -f $REMOTE_STAGING_DIR/fullchain.pem.new $REMOTE_STAGING_DIR/privkey.pem.new && nginx -t && systemctl reload {{ internal_media_nginx_service }}'"

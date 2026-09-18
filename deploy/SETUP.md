@@ -59,6 +59,48 @@ You will need to:
 - add TLS separately
 - ensure nginx can read `/media/emom_2tb`
 
+## 4a. Bastion Let’s Encrypt renewal
+
+The bastion can renew certificates publicly while the Raspberry Pi remains
+internal. The repository includes `letsencrypt-bastion.yml`, which installs a
+root-owned Certbot deploy hook on the bastion. The hook copies the renewed
+certificate and private key to the Pi, validates Nginx, and reloads it.
+
+Define `bastion` and `internal_media` inventory groups and override at least:
+
+- `certbot_lineage`
+- `internal_media_host`
+- `internal_media_user`
+- `internal_media_port`, if SSH is not on port 22
+
+The one-time bootstrap is:
+
+```bash
+ansible-playbook letsencrypt-bastion.yml --tags generate-key
+```
+
+Authorize the displayed, restricted public key in the Pi account's
+`~/.ssh/authorized_keys`. That account must be able to run `su -c` without a
+password, as configured on the Pi. Then verify access and install the hook:
+
+```bash
+ansible-playbook letsencrypt-bastion.yml --tags verify,install-hook
+```
+
+The hook uses only the root-owned key generated on the bastion. It does not
+depend on the operator's personal SSH key. The existing Certbot renewal
+configuration and Nginx authenticator are left unchanged.
+
+Test the complete renewal path with:
+
+```bash
+certbot renew --dry-run
+```
+
+The Pi stores the delivered files under
+`/etc/letsencrypt/live/<certbot_lineage>/`, runs `nginx -t`, and reloads Nginx
+only after a successful validation.
+
 ## 5. Install systemd Services
 
 Copy both service units:

@@ -1,0 +1,129 @@
+---
+- name: Bootstrap and configure bastion certificate delivery
+  hosts: bastion
+  become: true
+  gather_facts: true
+  vars:
+    # Override these in inventory/group_vars. The bastion's existing Certbot
+    # renewal configuration is deliberately not modified.
+    certbot_lineage: "my.domain"
+    certbot_hook_path: /etc/letsencrypt/renewal-hooks/deploy/emom-copy-certificates
+    certbot_deploy_key_path: /root/.ssh/emom-cert-deploy
+    certbot_deploy_key_comment: emom-letsencrypt-deploy
+    internal_media_host: "{{ hostvars[groups['internal_media'][0]].ansible_host | default(groups['internal_media'][0]) }}"
+    internal_media_port: 22
+    internal_media_user: emom-cert
+    internal_media_su_command: "su -c"
+    internal_media_cert_dir: "/etc/letsencrypt/live/{{ certbot_lineage }}"
+    internal_media_nginx_service: nginx
+    internal_media_ssh_known_hosts: /root/.ssh/known_hosts
+    internal_media_staging_dir: /tmp/emom-letsencrypt
+
+  pre_tasks:
+    - name: Require the expected inventory groups
+      ansible.builtin.assert:
+        that:
+          - groups['internal_media'] | length > 0
+          - certbot_lineage | length > 0
+          - internal_media_user | length > 0
+        fail_msg: "Define an internal_media host and the certificate delivery variables."
+      tags: [always]
+
+  tasks:
+    - name: Ensure bastion SSH directory exists
+      ansible.builtin.file:
+        path: /root/.ssh
+        state: directory
+        owner: root
+        group: root
+        mode: '0700'
+      tags: [generate-key, install-hook, verify]
+
+    - name: Generate dedicated certificate delivery key
+      ansible.builtin.command:
+        argv:
+          - ssh-keygen
+          - -t
+          - ed25519
+          - -f
+          - "{{ certbot_deploy_key_path }}"
+          - -N
+          - ''
+          - -C
+          - "{{ certbot_deploy_key_comment }}"
+        creates: "{{ certbot_deploy_key_path }}"
+      register: certbot_deploy_key_generation
+      tags: [generate-key]
+
+    - name: Read dedicated certificate delivery public key
+      ansible.builtin.slurp:
+        src: "{{ certbot_deploy_key_path }}.pub"
+      register: certbot_deploy_key_public
+      tags: [generate-key]
+
+    - name: Display public key for one-time Pi authorization
+      ansible.builtin.debug:
+        msg:
+          - "Authorize this key on {{ internal_media_user }}@{{ internal_media_host }} on the Pi:"
+          - "restrict {{ certbot_deploy_key_public.content | b64decode | trim }}"
+          - "After authorization, run: ansible-playbook letsencrypt-bastion.yml --tags verify,install-hook"
+      tags: [generate-key]
+
+    - name: Accept the Pi host key
+      ansible.builtin.known_hosts:
+        path: "{{ internal_media_ssh_known_hosts }}"
+        name: "[{{ internal_media_host }}]:{{ internal_media_port }}"
+        key: "{{ lookup('pipe', 'ssh-keyscan -p ' ~ (internal_media_port | string) ~ ' -T 10 ' ~ internal_media_host) }}"
+        state: present
+      tags: [verify, install-hook]
+
+    - name: Verify dedicated key can run passwordless su on the Pi
+      ansible.builtin.command:
+        argv:
+          - ssh
+          - -i
+          - "{{ certbot_deploy_key_path }}"
+          - -o
+          - BatchMode=yes
+          - -o
+          - StrictHostKeyChecking=yes
+          - -p
+          - "{{ internal_media_port }}"
+          - "{{ internal_media_user }}@{{ internal_media_host }}"
+          - "{{ internal_media_su_command }}"
+          - id
+      register: internal_media_identity
+      changed_when: false
+      tags: [verify, install-hook]
+
+    - name: Confirm the remote identity is root
+      ansible.builtin.assert:
+        that: "'uid=0(root)' in internal_media_identity.stdout"
+        fail_msg: "The deploy key reached the Pi but could not obtain a root shell via su."
+      tags: [verify, install-hook]
+
+    - name: Ensure hook parent directory exists
+      ansible.builtin.file:
+        path: "{{ certbot_hook_path | dirname }}"
+        state: directory
+        owner: root
+        group: root
+        mode: '0755'
+      tags: [install-hook]
+
+    - name: Reinstall certificate delivery deploy hook after parent creation
+      ansible.builtin.template:
+        src: deploy/letsencrypt/emom-copy-certificates
+        dest: "{{ certbot_hook_path }}"
+        owner: root
+        group: root
+        mode: '0700'
+      tags: [install-hook]
+
+    - name: Print configured delivery summary
+      ansible.builtin.debug:
+        msg:
+          lineage: "{{ certbot_lineage }}"
+          destination: "{{ internal_media_user }}@{{ internal_media_host }}:{{ internal_media_cert_dir }}"
+          hook: "{{ certbot_hook_path }}"
+      tags: [install-hook]
